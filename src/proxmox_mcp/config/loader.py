@@ -25,7 +25,7 @@ def load_config(config_path: Optional[str] = None) -> Config:
     4. Converts to typed Config object using Pydantic
     
     Configuration must include:
-    - Proxmox connection settings (host, port, etc.)
+    - A list of Proxmox connection settings (host, port, etc.)
     - Authentication credentials (user, token)
     - Logging configuration
     
@@ -36,20 +36,15 @@ def load_config(config_path: Optional[str] = None) -> Config:
     Returns:
         Config object containing validated configuration:
         {
-            "proxmox": {
-                "host": "proxmox-host",
-                "port": 8006,
-                ...
-            },
-            "auth": {
-                "user": "username",
-                "token_name": "token-name",
-                ...
-            },
-            "logging": {
-                "level": "INFO",
-                ...
-            }
+            "proxmox": [
+                {
+                    "name": "pve-cluster-1",
+                    "host": "proxmox-host-1",
+                    ...
+                }
+            ],
+            "auth": { ... },
+            "logging": { ... }
         }
 
     Raises:
@@ -65,8 +60,25 @@ def load_config(config_path: Optional[str] = None) -> Config:
     try:
         with open(config_path) as f:
             config_data = json.load(f)
-            if not config_data.get('proxmox', {}).get('host'):
-                raise ValueError("Proxmox host cannot be empty")
+
+            # Validate Proxmox server configurations
+            proxmox_configs = config_data.get('proxmox')
+            if not isinstance(proxmox_configs, list) or not proxmox_configs:
+                raise ValueError("Config file must contain a non-empty list of proxmox servers.")
+
+            server_names = set()
+            for server_config in proxmox_configs:
+                if not isinstance(server_config, dict):
+                    raise ValueError("Each item in 'proxmox' list must be a server configuration object.")
+                if 'name' not in server_config or not server_config['name']:
+                    raise ValueError("Each proxmox server configuration must have a non-empty 'name'.")
+                if 'host' not in server_config or not server_config['host']:
+                    raise ValueError(f"Proxmox server '{server_config.get('name')}' must have a non-empty 'host'.")
+
+                if server_config['name'] in server_names:
+                    raise ValueError(f"Duplicate server name found: '{server_config['name']}'. Server names must be unique.")
+                server_names.add(server_config['name'])
+
             return Config(**config_data)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in config file: {e}")

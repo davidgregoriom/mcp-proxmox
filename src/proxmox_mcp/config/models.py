@@ -13,7 +13,7 @@ The models provide:
 - Field descriptions
 - Required vs optional field handling
 """
-from typing import Optional, Annotated
+from typing import Optional, Annotated, List
 from pydantic import BaseModel, Field
 
 class NodeStatus(BaseModel):
@@ -41,6 +41,7 @@ class ProxmoxConfig(BaseModel):
     establishing a connection to the Proxmox API server.
     Provides sensible defaults for optional parameters.
     """
+    name: str # Required: Unique name for the server/cluster
     host: str  # Required: Proxmox host address
     port: int = 8006  # Optional: API port (default: 8006)
     verify_ssl: bool = True  # Optional: SSL verification (default: True)
@@ -75,6 +76,6 @@ class Config(BaseModel):
     configuration object. All sections are required to ensure
     proper server operation.
     """
-    proxmox: ProxmoxConfig  # Required: Proxmox connection settings
+    proxmox: List[ProxmoxConfig]  # Required: Proxmox connection settings
     auth: AuthConfig  # Required: Authentication credentials
     logging: LoggingConfig  # Required: Logging configuration

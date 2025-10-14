@@ -20,7 +20,6 @@ class ProxmoxTool:
     """Base class for Proxmox MCP tools.
     
     This class provides common functionality used by all Proxmox tool implementations:
-    - Proxmox API access
     - Standardized logging
     - Response formatting
     - Error handling
@@ -29,13 +28,8 @@ class ProxmoxTool:
     behavior and error handling across the MCP server.
     """
 
-    def __init__(self, proxmox_api: ProxmoxAPI):
-        """Initialize the tool.
-
-        Args:
-            proxmox_api: Initialized ProxmoxAPI instance
-        """
-        self.proxmox = proxmox_api
+    def __init__(self):
+        """Initialize the tool."""
         self.logger = logging.getLogger(f"proxmox-mcp.{self.__class__.__name__.lower()}")
 
     def _format_response(self, data: Any, resource_type: Optional[str] = None) -> List[Content]:

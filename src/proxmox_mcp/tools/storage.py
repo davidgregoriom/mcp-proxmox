@@ -14,6 +14,7 @@ detailed storage information might be temporarily unavailable.
 """
 from typing import List
 from mcp.types import TextContent as Content
+from proxmoxer import ProxmoxAPI
 from .base import ProxmoxTool
 from .definitions import GET_STORAGE_DESC
 
@@ -30,7 +31,7 @@ class StorageTools(ProxmoxTool):
     storage information might be temporarily unavailable.
     """
 
-    def get_storage(self) -> List[Content]:
+    def get_storage(self, proxmox_api: ProxmoxAPI) -> List[Content]:
         """List storage pools across the cluster with detailed status.
 
         Retrieves comprehensive information for each storage pool including:
@@ -44,6 +45,9 @@ class StorageTools(ProxmoxTool):
         
         Implements a fallback mechanism that returns basic information
         if detailed status retrieval fails for any storage pool.
+
+        Args:
+            proxmox_api: Initialized ProxmoxAPI instance.
 
         Returns:
             List of Content objects containing formatted storage information:
@@ -61,13 +65,13 @@ class StorageTools(ProxmoxTool):
             RuntimeError: If the cluster-wide storage query fails
         """
         try:
-            result = self.proxmox.storage.get()
+            result = proxmox_api.storage.get()
             storage = []
             
             for store in result:
                 # Get detailed storage info including usage
                 try:
-                    status = self.proxmox.nodes(store.get("node", "localhost")).storage(store["storage"]).status.get()
+                    status = proxmox_api.nodes(store.get("node", "localhost")).storage(store["storage"]).status.get()
                     storage.append({
                         "storage": store["storage"],
                         "type": store["type"],
