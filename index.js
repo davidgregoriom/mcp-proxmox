@@ -502,9 +502,9 @@ export class ProxmoxServer {
 
   async start() {
     const port = parseInt(process.env.MCP_PORT || '3000', 10);
-    const transport = new SSEServerTransport({ port });
+    const transport = new SSEServerTransport({ port, endpoint: '/api/proxmox' });
     await this.server.connect(transport);
-    console.log(`Proxmox MCP server running on http://localhost:${port}`);
+    console.log(`Proxmox MCP server running on http://localhost:${port}/api/proxmox`);
   }
 }
 

@@ -56,17 +56,17 @@ Start the web server with:
 ```bash
 node index.js
 ```
-The server will start and listen on the port you defined in your `.env` file (e.g., `http://localhost:3000`). The SDK automatically handles the `/mcp` endpoint.
+The server will start and listen on the port you defined in your `.env` file (e.g., `http://localhost:3000`). The SDK automatically handles the `/api/proxmox` endpoint.
 
 ## 📡 Interacting with the Server
 
-You can interact with the server by sending JSON-RPC requests to the `/mcp` endpoint.
+You can interact with the server by sending JSON-RPC requests to the `/api/proxmox` endpoint.
 
 ### Example: Listing Tools (using `curl`)
 ```bash
 curl -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}' \
-  http://localhost:3000/mcp
+  http://localhost:3000/api/proxmox
 ```
 
 ### Example: Calling a Streaming Tool
@@ -74,12 +74,12 @@ For streaming tools, the SDK's transport handles the `text/event-stream` respons
 ```bash
 curl -N -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "proxmox_execute_vm_command", "arguments": {"server": "pve-cluster-1", "node": "pve", "vmid": "100", "command": "sleep 5 && echo hello"}}}' \
-  http://localhost:3000/mcp
+  http://localhost:3000/api/proxmox
 ```
 
 # 🔧 Available Tools
 
-All tools are called via the `/mcp` endpoint. The `proxmox_execute_vm_command` tool is streamable.
+All tools are called via the `/api/proxmox` endpoint. The `proxmox_execute_vm_command` tool is streamable.
 
 ... (tool descriptions remain the same) ...
 
