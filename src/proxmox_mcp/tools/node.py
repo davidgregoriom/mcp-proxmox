@@ -14,7 +14,6 @@ with fallback mechanisms for partial data availability.
 """
 from typing import List
 from mcp.types import TextContent as Content
-from proxmoxer import ProxmoxAPI
 from .base import ProxmoxTool
 from .definitions import GET_NODES_DESC, GET_NODE_STATUS_DESC
 
@@ -31,7 +30,7 @@ class NodeTools(ProxmoxTool):
     node information might be temporarily unavailable.
     """
 
-    def get_nodes(self, proxmox_api: ProxmoxAPI) -> List[Content]:
+    def get_nodes(self) -> List[Content]:
         """List all nodes in the Proxmox cluster with detailed status.
 
         Retrieves comprehensive information for each node including:
@@ -42,9 +41,6 @@ class NodeTools(ProxmoxTool):
         
         Implements a fallback mechanism that returns basic information
         if detailed status retrieval fails for any node.
-
-        Args:
-            proxmox_api: Initialized ProxmoxAPI instance.
 
         Returns:
             List of Content objects containing formatted node information:
@@ -63,7 +59,7 @@ class NodeTools(ProxmoxTool):
             RuntimeError: If the cluster-wide node query fails
         """
         try:
-            result = proxmox_api.nodes.get()
+            result = self.proxmox.nodes.get()
             nodes = []
             
             # Get detailed info for each node
@@ -71,7 +67,7 @@ class NodeTools(ProxmoxTool):
                 node_name = node["node"]
                 try:
                     # Get detailed status for each node
-                    status = proxmox_api.nodes(node_name).status.get()
+                    status = self.proxmox.nodes(node_name).status.get()
                     nodes.append({
                         "node": node_name,
                         "status": node["status"],
@@ -98,7 +94,7 @@ class NodeTools(ProxmoxTool):
         except Exception as e:
             self._handle_error("get nodes", e)
 
-    def get_node_status(self, proxmox_api: ProxmoxAPI, node: str) -> List[Content]:
+    def get_node_status(self, node: str) -> List[Content]:
         """Get detailed status information for a specific node.
 
         Retrieves comprehensive status information including:
@@ -110,7 +106,6 @@ class NodeTools(ProxmoxTool):
         - Running tasks and services
 
         Args:
-            proxmox_api: Initialized ProxmoxAPI instance.
             node: Name/ID of node to query (e.g., 'pve1', 'proxmox-node2')
 
         Returns:
@@ -134,7 +129,7 @@ class NodeTools(ProxmoxTool):
             RuntimeError: If status retrieval fails (node offline, network issues)
         """
         try:
-            result = proxmox_api.nodes(node).status.get()
+            result = self.proxmox.nodes(node).status.get()
             return self._format_response((node, result), "node_status")
         except Exception as e:
             self._handle_error(f"get status for node {node}", e)

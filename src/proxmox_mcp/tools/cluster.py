@@ -12,7 +12,6 @@ cluster health and ensuring proper operation.
 """
 from typing import List
 from mcp.types import TextContent as Content
-from proxmoxer import ProxmoxAPI
 from .base import ProxmoxTool
 from .definitions import GET_CLUSTER_STATUS_DESC
 
@@ -29,7 +28,7 @@ class ClusterTools(ProxmoxTool):
     proper operation of the Proxmox environment.
     """
 
-    def get_cluster_status(self, proxmox_api: ProxmoxAPI) -> List[Content]:
+    def get_cluster_status(self) -> List[Content]:
         """Get overall Proxmox cluster health and configuration status.
 
         Retrieves comprehensive cluster information including:
@@ -43,9 +42,6 @@ class ClusterTools(ProxmoxTool):
         - Monitoring node membership
         - Verifying resource availability
         - Detecting potential issues
-
-        Args:
-            proxmox_api: Initialized ProxmoxAPI instance.
 
         Returns:
             List of Content objects containing formatted cluster status:
@@ -68,7 +64,7 @@ class ClusterTools(ProxmoxTool):
                         - API endpoint failures
         """
         try:
-            result = proxmox_api.cluster.status.get()
+            result = self.proxmox.cluster.status.get()
             status = {
                 "name": result[0].get("name") if result else None,
                 "quorum": result[0].get("quorate"),

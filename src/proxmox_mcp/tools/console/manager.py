@@ -16,7 +16,6 @@ The module implements a robust command execution system with:
 
 import logging
 from typing import Dict, Any
-from proxmoxer import ProxmoxAPI
 
 class VMConsoleManager:
     """Manager class for VM console operations.
@@ -34,7 +33,7 @@ class VMConsoleManager:
     - Comprehensive error handling
     """
 
-    def __init__(self, proxmox_api: ProxmoxAPI):
+    def __init__(self, proxmox_api):
         """Initialize the VM console manager.
 
         Args:

@@ -1,21 +1,24 @@
-# 🚀 Proxmox MCP Server
+# 🚀 Proxmox MCP Server (Node.js Edition)
 
-A Model Context Protocol (MCP) server for interacting with multiple Proxmox hypervisors or clusters, providing a clean interface for managing nodes, VMs, and storage.
+A Node.js-based Model Context Protocol (MCP) server for interacting with multiple Proxmox hypervisors, providing a clean interface for managing nodes, VMs, and containers.
 
 ## ✨ Features
 
 - 🌐 **Multi-Server Support**: Connect to and manage multiple Proxmox servers or clusters from a single instance.
-- 🛠️ Built with the official MCP SDK for Python.
+- 🛠️ Built with the official MCP SDK for Node.js.
 - 🔐 Secure token-based authentication with Proxmox.
-- 🖥️ Comprehensive management of nodes, VMs, storage, and clusters.
-- 💻 VM console command execution via QEMU Guest Agent.
+- 🖥️ Comprehensive node and VM management.
+- 💻 VM console command execution (elevated mode).
+- 📊 Real-time resource monitoring.
 - 🎨 Rich markdown-formatted output.
+- ⚡ Fast Node.js performance.
 
 ## 📦 Installation
 
 ### Prerequisites
-- Python 3.8+
-- Access to one or more Proxmox servers with API token credentials.
+- Node.js 16+ and npm
+- Git
+- Access to a Proxmox server with API token credentials
 
 ### Quick Install
 
@@ -27,159 +30,150 @@ A Model Context Protocol (MCP) server for interacting with multiple Proxmox hype
 
 2.  **Install dependencies:**
     ```bash
-    pip install -r requirements.in
+    npm install
     ```
 
-3.  **Create a configuration file:**
-    Create a file named `config.json` and place it in the root of the project or a known location.
-
-4.  **Set the environment variable:**
-    Create a `.env` file in the project root and add the following line, pointing to your configuration file:
-    ```
-    PROXMOX_MCP_CONFIG=/path/to/your/config.json
-    ```
-    For example: `PROXMOX_MCP_CONFIG=./config.json`
+3.  **Create the configuration file:**
+    Create a file named `config.json` inside a `proxmox-config` directory in the root of the project.
 
 ## ⚙️ Configuration
 
-The server is configured using a single JSON file. Here is an example `config.json`:
+The server is configured using a JSON file located at `proxmox-config/config.json`.
 
+### Example `config.json`
 ```json
 {
-  "proxmox": [
+  "servers": [
     {
       "name": "pve-cluster-1",
       "host": "192.168.1.10",
       "port": 8006,
-      "verify_ssl": true
+      "user": "root@pam",
+      "tokenName": "mcp_token",
+      "tokenValue": "your-token-value-here",
+      "allowElevated": true
     },
     {
       "name": "pve-node-standalone",
       "host": "10.0.0.5",
       "port": 8006,
-      "verify_ssl": false
+      "user": "root@pam",
+      "tokenName": "mcp_token",
+      "tokenValue": "your-other-token-value-here",
+      "allowElevated": false
     }
-  ],
-  "auth": {
-    "user": "root@pam",
-    "token_name": "mcp_token",
-    "token_value": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  },
-  "logging": {
-    "level": "INFO"
-  }
+  ]
 }
 ```
 
 ### Configuration Details
-
--   **`proxmox`** (list): A list of your Proxmox servers or clusters.
-    -   `name` (string, required): A unique name to identify this server (e.g., "lab-cluster"). This name is used in every tool call.
+-   `servers` (array): A list of your Proxmox server configurations.
+    -   `name` (string, required): A unique name to identify the server (e.g., "lab-cluster"). This name is used in every tool call.
     -   `host` (string, required): The IP address or hostname of the Proxmox server.
-    -   `port` (integer, optional): The API port, defaults to `8006`.
-    -   `verify_ssl` (boolean, optional): Set to `false` if using self-signed SSL certificates. Defaults to `true`.
--   **`auth`** (object): Your Proxmox API credentials.
+    -   `port` (number, optional): The API port, defaults to `8006`.
     -   `user` (string, required): The user, including the realm (e.g., `root@pam`).
-    -   `token_name` (string, required): The name of the API token.
-    -   `token_value` (string, required): The secret value of the API token.
--   **`logging`** (object): Logging configuration.
-    -   `level` (string, optional): The log level (e.g., "INFO", "DEBUG"). Defaults to "INFO".
+    -   `tokenName` (string, required): The name of the API token.
+    -   `tokenValue` (string, required): The secret value of the API token.
+    -   `allowElevated` (boolean, optional): Set to `true` to enable features requiring higher permissions. Defaults to `false`.
 
-### Proxmox API Token Setup
-1.  Log into your Proxmox web interface.
-2.  Navigate to **Datacenter** → **Permissions** → **API Tokens**.
-3.  Click **Add** and create a token for a user with sufficient permissions.
-4.  **Important**: Securely copy the **Token ID** (`token_name`) and the **Secret** (`token_value`). The secret is only shown once.
+### Permission Levels
+-   **Basic Mode** (`allowElevated: false`): For safe, read-only operations like listing nodes and VMs.
+-   **Elevated Mode** (`allowElevated: true`): Enables advanced, potentially destructive operations like executing commands in a VM. Requires an API token with more permissions (e.g., `Sys.Audit`, `VM.Monitor`, `VM.Console`).
 
 ## 🚀 Running the Server
 
-You can run the server directly for testing or integrate it with an MCP client.
-
 ### Direct Execution
 ```bash
-python -m src.proxmox_mcp.server
+node index.js
 ```
 
 ### MCP Client Integration
-For clients like Claude Code, add the following to your MCP configuration:
+For clients like Claude Code, add this to your MCP configuration:
 ```json
 {
   "mcpServers": {
-    "proxmox-manager": {
-      "command": "python",
-      "args": ["-m", "src.proxmox_mcp.server"],
+    "mcp-proxmox": {
+      "command": "node",
+      "args": ["index.js"],
       "cwd": "/absolute/path/to/mcp-proxmox"
     }
   }
 }
 ```
-**Note:** Remember to replace `/absolute/path/to/mcp-proxmox` with the actual path to the project directory.
+**Note:** Replace `/absolute/path/to/mcp-proxmox` with the actual path to your installation.
 
-## 🔧 Available Tools
+# 🔧 Available Tools
 
-All tools require a `server` parameter to specify which Proxmox instance to target.
-
----
-
-### `get_nodes`
-Lists all nodes in a specified Proxmox cluster.
--   **Parameters**:
-    -   `server` (string, required): The name of the server/cluster to target.
+All tools now require a `server` parameter to specify which Proxmox instance to target.
 
 ---
 
-### `get_node_status`
-Gets detailed status for a specific node.
+### `proxmox_get_nodes`
+-   **Description**: Lists all nodes in a Proxmox cluster.
 -   **Parameters**:
-    -   `server` (string, required): The name of the server/cluster to target.
-    -   `node` (string, required): The name of the node to query.
+    -   `server` (string, required): The name of the server to target.
 
 ---
 
-### `get_vms`
-Lists all virtual machines in a specified cluster.
+### `proxmox_get_node_status`
+-   **Description**: Gets detailed status for a specific node (requires elevated permissions).
 -   **Parameters**:
-    -   `server` (string, required): The name of the server/cluster to target.
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, required): The name of the node.
 
 ---
 
-### `execute_vm_command`
-Executes a command inside a VM using the QEMU Guest Agent.
+### `proxmox_get_vms`
+-   **Description**: Lists all VMs and containers on a server or a specific node.
 -   **Parameters**:
-    -   `server` (string, required): The name of the server/cluster to target.
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, optional): Filter by a specific node.
+    -   `type` (string, optional): Filter by type (`qemu`, `lxc`, or `all`).
+
+---
+
+### `proxmox_get_vm_status`
+-   **Description**: Gets detailed status for a specific VM or container.
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
     -   `node` (string, required): The node where the VM is located.
-    -   `vmid` (string, required): The ID of the VM.
+    -   `vmid` (string, required): The ID of the VM or container.
+    -   `type` (string, optional): The type (`qemu` or `lxc`).
+
+---
+
+### `proxmox_execute_vm_command`
+-   **Description**: Executes a command in a VM or container (requires elevated permissions).
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, required): The node where the VM is located.
+    -   `vmid` (string, required): The ID of the VM or container.
     -   `command` (string, required): The command to execute.
+    -   `type` (string, optional): The type (`qemu` or `lxc`).
 
 ---
 
-### `get_storage`
-Lists all storage pools in a specified cluster.
+### `proxmox_get_storage`
+-   **Description**: Lists storage pools on a server or a specific node.
 -   **Parameters**:
-    -   `server` (string, required): The name of the server/cluster to target.
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, optional): Filter by a specific node.
 
 ---
 
-### `get_cluster_status`
-Gets the overall health and status of a specified Proxmox cluster.
+### `proxmox_get_cluster_status`
+-   **Description**: Gets the overall status of a Proxmox cluster.
 -   **Parameters**:
-    -   `server` (string, required): The name of the server/cluster to target.
+    -   `server` (string, required): The name of the server to target.
 
 ## 📁 Project Structure
 
 ```
 mcp-proxmox/
-├── src/
-│   └── proxmox_mcp/
-│       ├── __init__.py
-│       ├── server.py         # Main MCP server implementation
-│       ├── config/           # Configuration models and loader
-│       ├── core/             # Core logic (Proxmox manager)
-│       └── tools/            # Tool implementations
-├── tests/                    # Test suite
-├── config.json.example       # Example configuration
-├── requirements.in           # Project dependencies
-├── .env.example              # Example environment file
+├── index.js                  # Main MCP server implementation
+├── proxmox-config/
+│   └── config.json           # Server configurations
+├── package.json              # Node.js dependencies and scripts
 └── README.md                 # This documentation
 ```
 

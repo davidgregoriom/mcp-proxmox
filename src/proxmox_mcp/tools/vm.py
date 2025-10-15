@@ -15,7 +15,6 @@ detailed VM information might be temporarily unavailable.
 """
 from typing import List
 from mcp.types import TextContent as Content
-from proxmoxer import ProxmoxAPI
 from .base import ProxmoxTool
 from .definitions import GET_VMS_DESC, EXECUTE_VM_COMMAND_DESC
 from .console.manager import VMConsoleManager
@@ -34,7 +33,16 @@ class VMTools(ProxmoxTool):
     with QEMU guest agent for VM command execution.
     """
 
-    def get_vms(self, proxmox_api: ProxmoxAPI) -> List[Content]:
+    def __init__(self, proxmox_api):
+        """Initialize VM tools.
+
+        Args:
+            proxmox_api: Initialized ProxmoxAPI instance
+        """
+        super().__init__(proxmox_api)
+        self.console_manager = VMConsoleManager(proxmox_api)
+
+    def get_vms(self) -> List[Content]:
         """List all virtual machines across the cluster with detailed status.
 
         Retrieves comprehensive information for each VM including:
@@ -47,9 +55,6 @@ class VMTools(ProxmoxTool):
         
         Implements a fallback mechanism that returns basic information
         if detailed configuration retrieval fails for any VM.
-
-        Args:
-            proxmox_api: Initialized ProxmoxAPI instance.
 
         Returns:
             List of Content objects containing formatted VM information:
@@ -70,14 +75,14 @@ class VMTools(ProxmoxTool):
         """
         try:
             result = []
-            for node in proxmox_api.nodes.get():
+            for node in self.proxmox.nodes.get():
                 node_name = node["node"]
-                vms = proxmox_api.nodes(node_name).qemu.get()
+                vms = self.proxmox.nodes(node_name).qemu.get()
                 for vm in vms:
                     vmid = vm["vmid"]
                     # Get VM config for CPU cores
                     try:
-                        config = proxmox_api.nodes(node_name).qemu(vmid).config.get()
+                        config = self.proxmox.nodes(node_name).qemu(vmid).config.get()
                         result.append({
                             "vmid": vmid,
                             "name": vm["name"],
@@ -106,7 +111,7 @@ class VMTools(ProxmoxTool):
         except Exception as e:
             self._handle_error("get VMs", e)
 
-    async def execute_command(self, proxmox_api: ProxmoxAPI, node: str, vmid: str, command: str) -> List[Content]:
+    async def execute_command(self, node: str, vmid: str, command: str) -> List[Content]:
         """Execute a command in a VM via QEMU guest agent.
 
         Uses the QEMU guest agent to execute commands within a running VM.
@@ -116,7 +121,6 @@ class VMTools(ProxmoxTool):
         - Command execution permissions must be enabled
 
         Args:
-            proxmox_api: Initialized ProxmoxAPI instance.
             node: Host node name (e.g., 'pve1', 'proxmox-node2')
             vmid: VM ID number (e.g., '100', '101')
             command: Shell command to run (e.g., 'uname -a', 'systemctl status nginx')
@@ -134,8 +138,7 @@ class VMTools(ProxmoxTool):
             RuntimeError: If command execution fails due to permissions or other issues
         """
         try:
-            console_manager = VMConsoleManager(proxmox_api)
-            result = await console_manager.execute_command(node, vmid, command)
+            result = await self.console_manager.execute_command(node, vmid, command)
             # Use the command output formatter from ProxmoxFormatters
             from ..formatting import ProxmoxFormatters
             formatted = ProxmoxFormatters.format_command_output(

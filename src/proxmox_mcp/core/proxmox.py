@@ -12,7 +12,7 @@ interactions, ensuring consistent connection handling and authentication
 across the MCP server.
 """
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 from proxmoxer import ProxmoxAPI
 from ..config.models import ProxmoxConfig, AuthConfig
 
@@ -20,7 +20,7 @@ class ProxmoxManager:
     """Manager class for Proxmox API operations.
     
     This class handles:
-    - API connection initialization and management for multiple servers
+    - API connection initialization and management
     - Configuration validation and merging
     - Connection testing and health checks
     - Token-based authentication setup
@@ -29,20 +29,16 @@ class ProxmoxManager:
     ensuring proper initialization and error handling for all API operations.
     """
     
-    def __init__(self, proxmox_configs: List[ProxmoxConfig], auth_config: AuthConfig):
-        """Initialize the Proxmox API manager for multiple servers.
+    def __init__(self, proxmox_config: ProxmoxConfig, auth_config: AuthConfig):
+        """Initialize the Proxmox API manager.
 
         Args:
-            proxmox_configs: List of Proxmox connection configurations
+            proxmox_config: Proxmox connection configuration
             auth_config: Authentication configuration
         """
         self.logger = logging.getLogger("proxmox-mcp.proxmox")
-        self.apis: Dict[str, ProxmoxAPI] = {}
-
-        for proxmox_config in proxmox_configs:
-            config = self._create_config(proxmox_config, auth_config)
-            api = self._setup_api(config)
-            self.apis[proxmox_config.name] = api
+        self.config = self._create_config(proxmox_config, auth_config)
+        self.api = self._setup_api()
 
     def _create_config(self, proxmox_config: ProxmoxConfig, auth_config: AuthConfig) -> Dict[str, Any]:
         """Create a configuration dictionary for ProxmoxAPI.
@@ -71,7 +67,7 @@ class ProxmoxManager:
             'service': proxmox_config.service
         }
 
-    def _setup_api(self, config: Dict[str, Any]) -> ProxmoxAPI:
+    def _setup_api(self) -> ProxmoxAPI:
         """Initialize and test Proxmox API connection.
 
         Performs the following steps:
@@ -91,42 +87,26 @@ class ProxmoxManager:
                         - SSL certificate validation errors
         """
         try:
-            self.logger.info(f"Connecting to Proxmox host: {config['host']}")
-            api = ProxmoxAPI(**config)
+            self.logger.info(f"Connecting to Proxmox host: {self.config['host']}")
+            api = ProxmoxAPI(**self.config)
             
             # Test connection
             api.version.get()
-            self.logger.info(f"Successfully connected to Proxmox API at {config['host']}")
+            self.logger.info("Successfully connected to Proxmox API")
             
             return api
         except Exception as e:
-            self.logger.error(f"Failed to connect to Proxmox at {config['host']}: {e}")
-            raise RuntimeError(f"Failed to connect to Proxmox at {config['host']}: {e}")
+            self.logger.error(f"Failed to connect to Proxmox: {e}")
+            raise RuntimeError(f"Failed to connect to Proxmox: {e}")
 
-    def get_api(self, server_name: str) -> ProxmoxAPI:
-        """Get the initialized Proxmox API instance for a specific server.
+    def get_api(self) -> ProxmoxAPI:
+        """Get the initialized Proxmox API instance.
         
         Provides access to the configured and tested ProxmoxAPI instance
         for making API calls. The instance maintains connection state and
         handles authentication automatically.
 
-        Args:
-            server_name: The name of the server to get the API for.
-
         Returns:
-            ProxmoxAPI instance ready for making API calls.
-
-        Raises:
-            KeyError: if the server_name is not found.
+            ProxmoxAPI instance ready for making API calls
         """
-        if server_name not in self.apis:
-            raise KeyError(f"Server '{server_name}' not found in configured servers.")
-        return self.apis[server_name]
-
-    def get_all_apis(self) -> Dict[str, ProxmoxAPI]:
-        """Get all initialized Proxmox API instances.
-
-        Returns:
-            A dictionary of ProxmoxAPI instances, keyed by server name.
-        """
-        return self.apis
+        return self.api

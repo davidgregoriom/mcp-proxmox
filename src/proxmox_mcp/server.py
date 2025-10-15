@@ -56,12 +56,13 @@ class ProxmoxMCPServer:
         
         # Initialize core components
         self.proxmox_manager = ProxmoxManager(self.config.proxmox, self.config.auth)
+        self.proxmox = self.proxmox_manager.get_api()
         
         # Initialize tools
-        self.node_tools = NodeTools()
-        self.vm_tools = VMTools()
-        self.storage_tools = StorageTools()
-        self.cluster_tools = ClusterTools()
+        self.node_tools = NodeTools(self.proxmox)
+        self.vm_tools = VMTools(self.proxmox)
+        self.storage_tools = StorageTools(self.proxmox)
+        self.cluster_tools = ClusterTools(self.proxmox)
         
         # Initialize MCP server
         self.mcp = FastMCP("ProxmoxMCP")
@@ -82,53 +83,37 @@ class ProxmoxMCPServer:
         
         # Node tools
         @self.mcp.tool(description=GET_NODES_DESC)
-        def get_nodes(
-            server: Annotated[str, Field(description="Name of the Proxmox server/cluster to target")]
-        ):
-            api = self.proxmox_manager.get_api(server)
-            return self.node_tools.get_nodes(api)
+        def get_nodes():
+            return self.node_tools.get_nodes()
 
         @self.mcp.tool(description=GET_NODE_STATUS_DESC)
         def get_node_status(
-            server: Annotated[str, Field(description="Name of the Proxmox server/cluster to target")],
             node: Annotated[str, Field(description="Name/ID of node to query (e.g. 'pve1', 'proxmox-node2')")]
         ):
-            api = self.proxmox_manager.get_api(server)
-            return self.node_tools.get_node_status(api, node)
+            return self.node_tools.get_node_status(node)
 
         # VM tools
         @self.mcp.tool(description=GET_VMS_DESC)
-        def get_vms(
-            server: Annotated[str, Field(description="Name of the Proxmox server/cluster to target")]
-        ):
-            api = self.proxmox_manager.get_api(server)
-            return self.vm_tools.get_vms(api)
+        def get_vms():
+            return self.vm_tools.get_vms()
 
         @self.mcp.tool(description=EXECUTE_VM_COMMAND_DESC)
         async def execute_vm_command(
-            server: Annotated[str, Field(description="Name of the Proxmox server/cluster to target")],
             node: Annotated[str, Field(description="Host node name (e.g. 'pve1', 'proxmox-node2')")],
             vmid: Annotated[str, Field(description="VM ID number (e.g. '100', '101')")],
             command: Annotated[str, Field(description="Shell command to run (e.g. 'uname -a', 'systemctl status nginx')")]
         ):
-            api = self.proxmox_manager.get_api(server)
-            return await self.vm_tools.execute_command(api, node, vmid, command)
+            return await self.vm_tools.execute_command(node, vmid, command)
 
         # Storage tools
         @self.mcp.tool(description=GET_STORAGE_DESC)
-        def get_storage(
-            server: Annotated[str, Field(description="Name of the Proxmox server/cluster to target")]
-        ):
-            api = self.proxmox_manager.get_api(server)
-            return self.storage_tools.get_storage(api)
+        def get_storage():
+            return self.storage_tools.get_storage()
 
         # Cluster tools
         @self.mcp.tool(description=GET_CLUSTER_STATUS_DESC)
-        def get_cluster_status(
-            server: Annotated[str, Field(description="Name of the Proxmox server/cluster to target")]
-        ):
-            api = self.proxmox_manager.get_api(server)
-            return self.cluster_tools.get_cluster_status(api)
+        def get_cluster_status():
+            return self.cluster_tools.get_cluster_status()
 
     def start(self) -> None:
         """Start the MCP server.

@@ -9,22 +9,17 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-// Load environment variables from .env file
+// Load configuration from JSON file
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const envPath = join(__dirname, '../../.env');
-
+const configPath = join(__dirname, 'proxmox-config/config.json');
+let config;
 try {
-  const envFile = readFileSync(envPath, 'utf8');
-  const envVars = envFile.split('\n').filter(line => line.includes('='));
-  for (const line of envVars) {
-    const [key, ...values] = line.split('=');
-    if (key && values.length > 0) {
-      process.env[key.trim()] = values.join('=').trim();
-    }
-  }
+  const configFile = readFileSync(configPath, 'utf8');
+  config = JSON.parse(configFile);
 } catch (error) {
-  console.error('Warning: Could not load .env file:', error.message);
+  console.error('Error: Could not load or parse config.json:', error.message);
+  process.exit(1);
 }
 
 export class ProxmoxServer {
@@ -41,12 +36,10 @@ export class ProxmoxServer {
       }
     );
     
-    this.proxmoxHost = process.env.PROXMOX_HOST || '192.168.6.247';
-    this.proxmoxUser = process.env.PROXMOX_USER || 'root@pam';
-    this.proxmoxTokenName = process.env.PROXMOX_TOKEN_NAME || 'mcpserver';
-    this.proxmoxTokenValue = process.env.PROXMOX_TOKEN_VALUE;
-    this.proxmoxPort = process.env.PROXMOX_PORT || '8006';
-    this.allowElevated = process.env.PROXMOX_ALLOW_ELEVATED === 'true';
+    this.servers = new Map();
+    for (const serverConfig of config.servers) {
+      this.servers.set(serverConfig.name, serverConfig);
+    }
     
     // Create agent that accepts self-signed certificates
     this.httpsAgent = new https.Agent({
@@ -56,12 +49,12 @@ export class ProxmoxServer {
     this.setupToolHandlers();
   }
 
-  async proxmoxRequest(endpoint, method = 'GET', body = null) {
-    const baseUrl = `https://${this.proxmoxHost}:${this.proxmoxPort}/api2/json`;
+  async proxmoxRequest(serverConfig, endpoint, method = 'GET', body = null) {
+    const baseUrl = `https://${serverConfig.host}:${serverConfig.port}/api2/json`;
     const url = `${baseUrl}${endpoint}`;
     
     const headers = {
-      'Authorization': `PVEAPIToken=${this.proxmoxUser}!${this.proxmoxTokenName}=${this.proxmoxTokenValue}`,
+      'Authorization': `PVEAPIToken=${serverConfig.user}!${serverConfig.tokenName}=${serverConfig.tokenValue}`,
       'Content-Type': 'application/json'
     };
 
@@ -106,7 +99,10 @@ export class ProxmoxServer {
           description: 'List all Proxmox cluster nodes with their status and resources',
           inputSchema: {
             type: 'object',
-            properties: {}
+            properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' }
+            },
+            required: ['server']
           }
         },
         {
@@ -115,9 +111,10 @@ export class ProxmoxServer {
           inputSchema: {
             type: 'object',
             properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' },
               node: { type: 'string', description: 'Node name (e.g., pve1, proxmox-node2)' }
             },
-            required: ['node']
+            required: ['server', 'node']
           }
         },
         {
@@ -126,9 +123,11 @@ export class ProxmoxServer {
           inputSchema: {
             type: 'object',
             properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' },
               node: { type: 'string', description: 'Optional: filter by specific node' },
               type: { type: 'string', enum: ['qemu', 'lxc', 'all'], description: 'VM type filter', default: 'all' }
-            }
+            },
+            required: ['server']
           }
         },
         {
@@ -137,11 +136,12 @@ export class ProxmoxServer {
           inputSchema: {
             type: 'object',
             properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' },
               node: { type: 'string', description: 'Node name where VM is located' },
               vmid: { type: 'string', description: 'VM ID number' },
               type: { type: 'string', enum: ['qemu', 'lxc'], description: 'VM type', default: 'qemu' }
             },
-            required: ['node', 'vmid']
+            required: ['server', 'node', 'vmid']
           }
         },
         {
@@ -150,12 +150,13 @@ export class ProxmoxServer {
           inputSchema: {
             type: 'object',
             properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' },
               node: { type: 'string', description: 'Node name where VM is located' },
               vmid: { type: 'string', description: 'VM ID number' },
               command: { type: 'string', description: 'Shell command to execute' },
               type: { type: 'string', enum: ['qemu', 'lxc'], description: 'VM type', default: 'qemu' }
             },
-            required: ['node', 'vmid', 'command']
+            required: ['server', 'node', 'vmid', 'command']
           }
         },
         {
@@ -164,8 +165,10 @@ export class ProxmoxServer {
           inputSchema: {
             type: 'object',
             properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' },
               node: { type: 'string', description: 'Optional: filter by specific node' }
-            }
+            },
+            required: ['server']
           }
         },
         {
@@ -173,7 +176,10 @@ export class ProxmoxServer {
           description: 'Get overall cluster status including nodes and resource usage',
           inputSchema: {
             type: 'object',
-            properties: {}
+            properties: {
+              server: { type: 'string', description: 'Name of the Proxmox server to target' }
+            },
+            required: ['server']
           }
         }
       ]
@@ -181,29 +187,40 @@ export class ProxmoxServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
+      const serverConfig = this.servers.get(args.server);
+      if (!serverConfig) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error: Server '${args.server}' not found in configuration.`
+            }
+          ]
+        };
+      }
 
       try {
         switch (name) {
           case 'proxmox_get_nodes':
-            return await this.getNodes();
+            return await this.getNodes(serverConfig);
             
           case 'proxmox_get_node_status':
-            return await this.getNodeStatus(args.node);
+            return await this.getNodeStatus(serverConfig, args.node);
             
           case 'proxmox_get_vms':
-            return await this.getVMs(args.node, args.type);
+            return await this.getVMs(serverConfig, args.node, args.type);
             
           case 'proxmox_get_vm_status':
-            return await this.getVMStatus(args.node, args.vmid, args.type);
+            return await this.getVMStatus(serverConfig, args.node, args.vmid, args.type);
             
           case 'proxmox_execute_vm_command':
-            return await this.executeVMCommand(args.node, args.vmid, args.command, args.type);
+            return await this.executeVMCommand(serverConfig, args.node, args.vmid, args.command, args.type);
             
           case 'proxmox_get_storage':
-            return await this.getStorage(args.node);
+            return await this.getStorage(serverConfig, args.node);
             
           case 'proxmox_get_cluster_status':
-            return await this.getClusterStatus();
+            return await this.getClusterStatus(serverConfig);
             
           default:
             throw new Error(`Unknown tool: ${name}`);
@@ -221,10 +238,10 @@ export class ProxmoxServer {
     });
   }
 
-  async getNodes() {
-    const nodes = await this.proxmoxRequest('/nodes');
+  async getNodes(serverConfig) {
+    const nodes = await this.proxmoxRequest(serverConfig, '/nodes');
     
-    let output = '🖥️  **Proxmox Cluster Nodes**\n\n';
+    let output = `🖥️  **Proxmox Cluster Nodes on ${serverConfig.name}**\n\n`;
     
     for (const node of nodes) {
       const status = node.status === 'online' ? '🟢' : '🔴';
@@ -246,19 +263,19 @@ export class ProxmoxServer {
     };
   }
 
-  async getNodeStatus(node) {
-    if (!this.allowElevated) {
+  async getNodeStatus(serverConfig, node) {
+    if (!serverConfig.allowElevated) {
       return {
         content: [{ 
           type: 'text', 
-          text: `⚠️  **Node Status Requires Elevated Permissions**\n\nTo view detailed node status, set \`PROXMOX_ALLOW_ELEVATED=true\` in your .env file and ensure your API token has Sys.Audit permissions.\n\n**Current permissions**: Basic (node listing only)`
+          text: `⚠️  **Node Status Requires Elevated Permissions on ${serverConfig.name}**\n\nTo view detailed node status, ensure \`allowElevated\` is set to true for this server in your config.json and the API token has Sys.Audit permissions.\n\n**Current permissions**: Basic (node listing only)`
         }]
       };
     }
     
-    const status = await this.proxmoxRequest(`/nodes/${node}/status`);
+    const status = await this.proxmoxRequest(serverConfig, `/nodes/${node}/status`);
     
-    let output = `🖥️  **Node ${node} Status**\n\n`;
+    let output = `🖥️  **Node ${node} Status on ${serverConfig.name}**\n\n`;
     output += `• **Status**: ${status.uptime ? '🟢 Online' : '🔴 Offline'}\n`;
     output += `• **Uptime**: ${status.uptime ? this.formatUptime(status.uptime) : 'N/A'}\n`;
     output += `• **Load Average**: ${status.loadavg?.join(', ') || 'N/A'}\n`;
@@ -273,12 +290,12 @@ export class ProxmoxServer {
     };
   }
 
-  async getVMs(nodeFilter = null, typeFilter = 'all') {
+  async getVMs(serverConfig, nodeFilter = null, typeFilter = 'all') {
     let vms = [];
     
     if (nodeFilter) {
-      const nodeVMs = await this.proxmoxRequest(`/nodes/${nodeFilter}/qemu`);
-      const nodeLXCs = await this.proxmoxRequest(`/nodes/${nodeFilter}/lxc`);
+      const nodeVMs = await this.proxmoxRequest(serverConfig, `/nodes/${nodeFilter}/qemu`);
+      const nodeLXCs = await this.proxmoxRequest(serverConfig, `/nodes/${nodeFilter}/lxc`);
       
       if (typeFilter === 'all' || typeFilter === 'qemu') {
         vms.push(...nodeVMs.map(vm => ({ ...vm, type: 'qemu', node: nodeFilter })));
@@ -287,22 +304,22 @@ export class ProxmoxServer {
         vms.push(...nodeLXCs.map(vm => ({ ...vm, type: 'lxc', node: nodeFilter })));
       }
     } else {
-      const nodes = await this.proxmoxRequest('/nodes');
+      const nodes = await this.proxmoxRequest(serverConfig, '/nodes');
       
       for (const node of nodes) {
         if (typeFilter === 'all' || typeFilter === 'qemu') {
-          const nodeVMs = await this.proxmoxRequest(`/nodes/${node.node}/qemu`);
+          const nodeVMs = await this.proxmoxRequest(serverConfig, `/nodes/${node.node}/qemu`);
           vms.push(...nodeVMs.map(vm => ({ ...vm, type: 'qemu', node: node.node })));
         }
         
         if (typeFilter === 'all' || typeFilter === 'lxc') {
-          const nodeLXCs = await this.proxmoxRequest(`/nodes/${node.node}/lxc`);
+          const nodeLXCs = await this.proxmoxRequest(serverConfig, `/nodes/${node.node}/lxc`);
           vms.push(...nodeLXCs.map(vm => ({ ...vm, type: 'lxc', node: node.node })));
         }
       }
     }
     
-    let output = '💻 **Virtual Machines**\n\n';
+    let output = `💻 **Virtual Machines on ${serverConfig.name}**\n\n`;
     
     if (vms.length === 0) {
       output += 'No virtual machines found.\n';
@@ -333,8 +350,8 @@ export class ProxmoxServer {
     };
   }
 
-  async getVMStatus(node, vmid, type = 'qemu') {
-    const vmStatus = await this.proxmoxRequest(`/nodes/${node}/${type}/${vmid}/status/current`);
+  async getVMStatus(serverConfig, node, vmid, type = 'qemu') {
+    const vmStatus = await this.proxmoxRequest(serverConfig, `/nodes/${node}/${type}/${vmid}/status/current`);
     
     const status = vmStatus.status === 'running' ? '🟢' : vmStatus.status === 'stopped' ? '🔴' : '🟡';
     const typeIcon = type === 'qemu' ? '🖥️' : '📦';
@@ -360,12 +377,12 @@ export class ProxmoxServer {
     };
   }
 
-  async executeVMCommand(node, vmid, command, type = 'qemu') {
-    if (!this.allowElevated) {
+  async executeVMCommand(serverConfig, node, vmid, command, type = 'qemu') {
+    if (!serverConfig.allowElevated) {
       return {
         content: [{ 
           type: 'text', 
-          text: `⚠️  **VM Command Execution Requires Elevated Permissions**\n\nTo execute commands on VMs, set \`PROXMOX_ALLOW_ELEVATED=true\` in your .env file and ensure your API token has appropriate VM permissions.\n\n**Current permissions**: Basic (VM listing only)\n**Requested command**: \`${command}\``
+          text: `⚠️  **VM Command Execution Requires Elevated Permissions on ${serverConfig.name}**\n\nTo execute commands on VMs, ensure \`allowElevated\` is set to true for this server in your config.json and the API token has appropriate VM permissions.\n\n**Current permissions**: Basic (VM listing only)\n**Requested command**: \`${command}\``
         }]
       };
     }
@@ -373,11 +390,11 @@ export class ProxmoxServer {
     try {
       // For QEMU VMs, we need to use the guest agent
       if (type === 'qemu') {
-        const result = await this.proxmoxRequest(`/nodes/${node}/qemu/${vmid}/agent/exec`, 'POST', {
+        const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec`, 'POST', {
           command: command
         });
         
-        let output = `💻 **Command executed on VM ${vmid}**\n\n`;
+        let output = `💻 **Command executed on VM ${vmid} on ${serverConfig.name}**\n\n`;
         output += `**Command**: \`${command}\`\n`;
         output += `**Result**: Command submitted to guest agent\n`;
         output += `**PID**: ${result.pid || 'N/A'}\n\n`;
@@ -388,11 +405,11 @@ export class ProxmoxServer {
         };
       } else {
         // For LXC containers, we can execute directly
-        const result = await this.proxmoxRequest(`/nodes/${node}/lxc/${vmid}/exec`, 'POST', {
+        const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/lxc/${vmid}/exec`, 'POST', {
           command: command
         });
         
-        let output = `📦 **Command executed on LXC ${vmid}**\n\n`;
+        let output = `📦 **Command executed on LXC ${vmid} on ${serverConfig.name}**\n\n`;
         output += `**Command**: \`${command}\`\n`;
         output += `**Output**:\n\`\`\`\n${result || 'Command executed successfully'}\n\`\`\``;
         
@@ -410,22 +427,22 @@ export class ProxmoxServer {
     }
   }
 
-  async getStorage(nodeFilter = null) {
+  async getStorage(serverConfig, nodeFilter = null) {
     let storages = [];
     
     if (nodeFilter) {
-      storages = await this.proxmoxRequest(`/nodes/${nodeFilter}/storage`);
+      storages = await this.proxmoxRequest(serverConfig, `/nodes/${nodeFilter}/storage`);
       storages = storages.map(storage => ({ ...storage, node: nodeFilter }));
     } else {
-      const nodes = await this.proxmoxRequest('/nodes');
+      const nodes = await this.proxmoxRequest(serverConfig, '/nodes');
       
       for (const node of nodes) {
-        const nodeStorages = await this.proxmoxRequest(`/nodes/${node.node}/storage`);
+        const nodeStorages = await this.proxmoxRequest(serverConfig, `/nodes/${node.node}/storage`);
         storages.push(...nodeStorages.map(storage => ({ ...storage, node: node.node })));
       }
     }
     
-    let output = '💾 **Storage Pools**\n\n';
+    let output = `💾 **Storage Pools on ${serverConfig.name}**\n\n`;
     
     if (storages.length === 0) {
       output += 'No storage found.\n';
@@ -462,21 +479,21 @@ export class ProxmoxServer {
     };
   }
 
-  async getClusterStatus() {
+  async getClusterStatus(serverConfig) {
     try {
-      const nodes = await this.proxmoxRequest('/nodes');
+      const nodes = await this.proxmoxRequest(serverConfig, '/nodes');
       
       // Try to get cluster status, but fall back gracefully if permissions are insufficient
       let clusterStatus = null;
-      if (this.allowElevated) {
+      if (serverConfig.allowElevated) {
         try {
-          clusterStatus = await this.proxmoxRequest('/cluster/status');
+          clusterStatus = await this.proxmoxRequest(serverConfig, '/cluster/status');
         } catch (error) {
           // Ignore cluster status errors for elevated permissions
         }
       }
       
-      let output = '🏗️  **Proxmox Cluster Status**\n\n';
+      let output = `🏗️  **Proxmox Cluster Status on ${serverConfig.name}**\n\n`;
       
       // Cluster overview
       const onlineNodes = nodes.filter(n => n.status === 'online').length;
