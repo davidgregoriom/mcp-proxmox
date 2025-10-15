@@ -9,16 +9,44 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-// Load configuration from JSON file
+// Load environment variables from .env file
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const configPath = join(__dirname, 'proxmox-config/config.json');
-let config;
+const envPath = join(__dirname, '.env');
+
 try {
-  const configFile = readFileSync(configPath, 'utf8');
-  config = JSON.parse(configFile);
+  const envFile = readFileSync(envPath, 'utf8');
+  const envVars = envFile.split('\n').filter(line => line.includes('='));
+  for (const line of envVars) {
+    if (line.trim().startsWith('#')) continue;
+    const [key, ...values] = line.split('=');
+    if (key && values.length > 0) {
+      process.env[key.trim()] = values.join('=').trim();
+    }
+  }
 } catch (error) {
-  console.error('Error: Could not load or parse config.json:', error.message);
+  // Fail silently if .env is not found
+}
+
+// Parse server configurations from environment variables
+const serverConfigs = [];
+let i = 1;
+while (process.env[`PROXMOX_SERVER_${i}_NAME`]) {
+  const config = {
+    name: process.env[`PROXMOX_SERVER_${i}_NAME`],
+    host: process.env[`PROXMOX_SERVER_${i}_HOST`],
+    port: process.env[`PROXMOX_SERVER_${i}_PORT`] || '8006',
+    user: process.env[`PROXMOX_SERVER_${i}_USER`],
+    tokenName: process.env[`PROXMOX_SERVER_${i}_TOKEN_NAME`],
+    tokenValue: process.env[`PROXMOX_SERVER_${i}_TOKEN_VALUE`],
+    allowElevated: process.env[`PROXMOX_SERVER_${i}_ALLOW_ELEVATED`] === 'true',
+  };
+  serverConfigs.push(config);
+  i++;
+}
+
+if (serverConfigs.length === 0) {
+  console.error("Error: No Proxmox server configurations found in environment variables. Please define server configurations with the format PROXMOX_SERVER_1_NAME, etc.");
   process.exit(1);
 }
 
@@ -37,7 +65,7 @@ export class ProxmoxServer {
     );
     
     this.servers = new Map();
-    for (const serverConfig of config.servers) {
+    for (const serverConfig of serverConfigs) {
       this.servers.set(serverConfig.name, serverConfig);
     }
     
