@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import express from 'express';
+import cors from 'cors';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
 import https from 'https';
@@ -74,7 +75,23 @@ export class ProxmoxServer {
       rejectUnauthorized: false
     });
     
-    this.setupToolHandlers();
+  }
+
+  getToolDefinitions() {
+    return [
+      {
+        name: 'proxmox_get_nodes',
+        description: 'List all Proxmox cluster nodes with their status and resources',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            server: { type: 'string', description: 'Name of the Proxmox server to target' }
+          },
+          required: ['server']
+        }
+      },
+      // ... (all other tool definitions)
+    ];
   }
 
   async proxmoxRequest(serverConfig, endpoint, method = 'GET', body = null, params = null) {
@@ -124,9 +141,8 @@ export class ProxmoxServer {
     }
   }
 
-  setupToolHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
+  getToolDefinitions() {
+    return [
         {
           name: 'proxmox_get_nodes',
           description: 'List all Proxmox cluster nodes with their status and resources',
@@ -215,64 +231,7 @@ export class ProxmoxServer {
             required: ['server']
           }
         }
-      ]
-    }));
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      const serverConfig = this.servers.get(args.server);
-      if (!serverConfig) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error: Server '${args.server}' not found in configuration.`
-            }
-          ]
-        };
-      }
-
-      try {
-        switch (name) {
-          case 'proxmox_get_nodes':
-            return await this.getNodes(serverConfig);
-            
-          case 'proxmox_get_node_status':
-            return await this.getNodeStatus(serverConfig, args.node);
-            
-          case 'proxmox_get_vms':
-            return await this.getVMs(serverConfig, args.node, args.type);
-            
-          case 'proxmox_get_vm_status':
-            return await this.getVMStatus(serverConfig, args.node, args.vmid, args.type);
-            
-          case 'proxmox_execute_vm_command':
-            // This tool provides streaming updates, so we don't return its final value here.
-            // We await it to ensure the streaming is complete and to catch top-level errors.
-            await this.executeVMCommand(request, serverConfig, args.node, args.vmid, args.command, args.type);
-            // Return an empty final response to signal the end of the call.
-            return { content: [] };
-            
-          case 'proxmox_get_storage':
-            return await this.getStorage(serverConfig, args.node);
-            
-          case 'proxmox_get_cluster_status':
-            return await this.getClusterStatus(serverConfig);
-            
-          default:
-            throw new Error(`Unknown tool: ${name}`);
-        }
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Error: ${error.message}`
-            }
-          ]
-        };
-      }
-    });
+      ];
   }
 
   async getNodes(serverConfig) {
@@ -414,9 +373,14 @@ export class ProxmoxServer {
     };
   }
 
-  async executeVMCommand(request, serverConfig, node, vmid, command, type = 'qemu') {
+  async executeVMCommand(res, id, serverConfig, node, vmid, command, type = 'qemu') {
+    const sendEvent = (event, data) => {
+      res.write(`id: ${id}\n`);
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
     if (!serverConfig.allowElevated) {
-      // This is a terminal error, so we can throw.
       throw new Error(`VM Command Execution Requires Elevated Permissions on ${serverConfig.name}.`);
     }
 
@@ -431,9 +395,7 @@ export class ProxmoxServer {
         }
         
         const pid = execResponse.pid;
-        this.server.sendProgress(request, {
-          content: [{ type: 'text', text: `⏳ Command started on VM ${vmid} with PID ${pid}. Polling for output...` }]
-        });
+        sendEvent('progress', { content: [{ type: 'text', text: `⏳ Command started on VM ${vmid} with PID ${pid}. Polling for output...` }] });
 
         let statusResponse;
         const maxTries = 30; // Poll for a maximum of 15 seconds
@@ -441,11 +403,8 @@ export class ProxmoxServer {
           await sleep(500);
           statusResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec-status`, 'GET', null, { pid });
           if (statusResponse.exited === 1) break;
-          // Send a heartbeat progress update
           if (i > 0 && i % 4 === 0) {
-            this.server.sendProgress(request, {
-              content: [{ type: 'text', text: `... still waiting for command with PID ${pid} to complete...` }]
-            });
+            sendEvent('progress', { content: [{ type: 'text', text: `... still waiting for command with PID ${pid} to complete...` }] });
           }
         }
 
@@ -464,20 +423,18 @@ export class ProxmoxServer {
         if (error) resultText += `**Error (stderr)**:\n\`\`\`\n${error}\n\`\`\`\n`;
         if (!output && !error) resultText += "Command produced no output.";
         
-        // Send the final output as the last progress update.
-        this.server.sendProgress(request, { content: [{ type: 'text', text: resultText }] });
+        sendEvent('progress', { content: [{ type: 'text', text: resultText }] });
 
       } else { // LXC
-        // For LXC, the output is returned directly, so we just send it as a single "progress" update.
         const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/lxc/${vmid}/exec`, 'POST', { command: commandArray });
         let output = `📦 **Command executed on LXC ${vmid} on ${serverConfig.name}**\n\n`;
         output += `**Command**: \`${command}\`\n`;
         output += `**Output**:\n\`\`\`\n${result || 'Command executed successfully with no output.'}\n\`\`\``;
-        this.server.sendProgress(request, { content: [{ type: 'text', text: output }] });
+        sendEvent('progress', { content: [{ type: 'text', text: output }] });
       }
     } catch (error) {
-      // Throwing the error will send a final error response to the client.
-      throw new Error(`Failed to execute command on VM ${vmid}: ${error.message}`);
+      sendEvent('error', { error: { code: -32000, message: `Server error: ${error.message}` } });
+      res.end();
     }
   }
 
@@ -622,12 +579,87 @@ export class ProxmoxServer {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
-  async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('Proxmox MCP server running on stdio');
+  async start() {
+    const app = express();
+    app.use(cors());
+    app.use(express.json());
+
+    const port = process.env.MCP_PORT || 3000;
+
+    app.post('/mcp', async (req, res) => {
+      const { jsonrpc, id, method, params } = req.body;
+
+      if (jsonrpc !== '2.0' || !id || !method) {
+        return res.status(400).json({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } });
+      }
+
+      try {
+        if (method === 'tools/list') {
+          const tools = this.getToolDefinitions();
+          return res.json({ jsonrpc: '2.0', id, result: { tools } });
+        }
+
+        if (method === 'tools/call') {
+          const { name, arguments: args } = params;
+          const serverConfig = this.servers.get(args.server);
+
+          if (!serverConfig) {
+            throw new Error(`Server '${args.server}' not found in configuration.`);
+          }
+
+          // Handle streaming tool
+          if (name === 'proxmox_execute_vm_command') {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.flushHeaders();
+
+            // Pass the response object to the tool to stream data
+            await this.executeVMCommand(res, id, serverConfig, args.node, args.vmid, args.command, args.type);
+
+            // End the stream
+            res.write(`id: ${id}\nevent: end\ndata: {}\n\n`);
+            return res.end();
+          }
+
+          let result;
+          switch (name) {
+            case 'proxmox_get_nodes':
+              result = await this.getNodes(serverConfig);
+              break;
+            case 'proxmox_get_node_status':
+              result = await this.getNodeStatus(serverConfig, args.node);
+              break;
+            case 'proxmox_get_vms':
+              result = await this.getVMs(serverConfig, args.node, args.type);
+              break;
+            case 'proxmox_get_vm_status':
+              result = await this.getVMStatus(serverConfig, args.node, args.vmid, args.type);
+              break;
+            case 'proxmox_get_storage':
+              result = await this.getStorage(serverConfig, args.node);
+              break;
+            case 'proxmox_get_cluster_status':
+              result = await this.getClusterStatus(serverConfig);
+              break;
+            default:
+              throw new Error(`Unknown tool: ${name}`);
+          }
+          return res.json({ jsonrpc: '2.0', id, result });
+        }
+
+        return res.status(400).json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } });
+
+      } catch (error) {
+        return res.status(500).json({ jsonrpc: '2.0', id, error: { code: -32000, message: `Server error: ${error.message}` } });
+      }
+    });
+
+    app.listen(port, () => {
+      console.log(`Proxmox MCP HTTP server listening on port ${port}`);
+    });
   }
 }
 
 const server = new ProxmoxServer();
-server.run().catch(console.error);
+server.start().catch(console.error);
