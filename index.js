@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import express from 'express';
-import cors from 'cors';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
 import https from 'https';
@@ -53,7 +52,7 @@ if (serverConfigs.length === 0) {
 
 export class ProxmoxServer {
   constructor() {
-    this.server = new Server(
+    this.server = new McpServer(
       {
         name: 'proxmox-server',
         version: '1.0.0',
@@ -75,23 +74,7 @@ export class ProxmoxServer {
       rejectUnauthorized: false
     });
     
-  }
-
-  getToolDefinitions() {
-    return [
-      {
-        name: 'proxmox_get_nodes',
-        description: 'List all Proxmox cluster nodes with their status and resources',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            server: { type: 'string', description: 'Name of the Proxmox server to target' }
-          },
-          required: ['server']
-        }
-      },
-      // ... (all other tool definitions)
-    ];
+    this.setupToolHandlers();
   }
 
   async proxmoxRequest(serverConfig, endpoint, method = 'GET', body = null, params = null) {
@@ -141,97 +124,42 @@ export class ProxmoxServer {
     }
   }
 
-  getToolDefinitions() {
-    return [
-        {
-          name: 'proxmox_get_nodes',
-          description: 'List all Proxmox cluster nodes with their status and resources',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' }
-            },
-            required: ['server']
-          }
-        },
-        {
-          name: 'proxmox_get_node_status',
-          description: 'Get detailed status information for a specific Proxmox node',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' },
-              node: { type: 'string', description: 'Node name (e.g., pve1, proxmox-node2)' }
-            },
-            required: ['server', 'node']
-          }
-        },
-        {
-          name: 'proxmox_get_vms',
-          description: 'List all virtual machines across the cluster with their status',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' },
-              node: { type: 'string', description: 'Optional: filter by specific node' },
-              type: { type: 'string', enum: ['qemu', 'lxc', 'all'], description: 'VM type filter', default: 'all' }
-            },
-            required: ['server']
-          }
-        },
-        {
-          name: 'proxmox_get_vm_status',
-          description: 'Get detailed status information for a specific VM',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' },
-              node: { type: 'string', description: 'Node name where VM is located' },
-              vmid: { type: 'string', description: 'VM ID number' },
-              type: { type: 'string', enum: ['qemu', 'lxc'], description: 'VM type', default: 'qemu' }
-            },
-            required: ['server', 'node', 'vmid']
-          }
-        },
-        {
-          name: 'proxmox_execute_vm_command',
-          description: 'Execute a shell command on a virtual machine via Proxmox API',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' },
-              node: { type: 'string', description: 'Node name where VM is located' },
-              vmid: { type: 'string', description: 'VM ID number' },
-              command: { type: 'string', description: 'Shell command to execute' },
-              type: { type: 'string', enum: ['qemu', 'lxc'], description: 'VM type', default: 'qemu' }
-            },
-            required: ['server', 'node', 'vmid', 'command']
-          }
-        },
-        {
-          name: 'proxmox_get_storage',
-          description: 'List all storage pools and their usage across the cluster',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' },
-              node: { type: 'string', description: 'Optional: filter by specific node' }
-            },
-            required: ['server']
-          }
-        },
-        {
-          name: 'proxmox_get_cluster_status',
-          description: 'Get overall cluster status including nodes and resource usage',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              server: { type: 'string', description: 'Name of the Proxmox server to target' }
-            },
-            required: ['server']
-          }
+  setupToolHandlers() {
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: this.getToolDefinitions()
+    }));
+
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+      const serverConfig = this.servers.get(args.server);
+      if (!serverConfig) {
+        throw new Error(`Server '${args.server}' not found in configuration.`);
+      }
+
+      try {
+        switch (name) {
+          case 'proxmox_get_nodes':
+            return await this.getNodes(serverConfig);
+          case 'proxmox_get_node_status':
+            return await this.getNodeStatus(serverConfig, args.node);
+          case 'proxmox_get_vms':
+            return await this.getVMs(serverConfig, args.node, args.type);
+          case 'proxmox_get_vm_status':
+            return await this.getVMStatus(serverConfig, args.node, args.vmid, args.type);
+          case 'proxmox_get_storage':
+            return await this.getStorage(serverConfig, args.node);
+          case 'proxmox_get_cluster_status':
+            return await this.getClusterStatus(serverConfig);
+          case 'proxmox_execute_vm_command':
+            await this.executeVMCommand(request, serverConfig, args.node, args.vmid, args.command, args.type);
+            return { content: [] }; // Signal end for streaming tool
+          default:
+            throw new Error(`Unknown tool: ${name}`);
         }
-      ];
+      } catch (error) {
+        return { content: [{ type: 'text', text: `Error: ${error.message}` }] };
+      }
+    });
   }
 
   async getNodes(serverConfig) {
@@ -373,13 +301,7 @@ export class ProxmoxServer {
     };
   }
 
-  async executeVMCommand(res, id, serverConfig, node, vmid, command, type = 'qemu') {
-    const sendEvent = (event, data) => {
-      res.write(`id: ${id}\n`);
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
+  async executeVMCommand(request, serverConfig, node, vmid, command, type = 'qemu') {
     if (!serverConfig.allowElevated) {
       throw new Error(`VM Command Execution Requires Elevated Permissions on ${serverConfig.name}.`);
     }
@@ -387,54 +309,53 @@ export class ProxmoxServer {
     const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
     const commandArray = ['/bin/sh', '-c', command];
 
-    try {
-      if (type === 'qemu') {
-        const execResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec`, 'POST', { command: commandArray });
-        if (!execResponse || !execResponse.pid) {
-          throw new Error('Failed to start command execution or get a PID from the guest agent.');
-        }
-        
-        const pid = execResponse.pid;
-        sendEvent('progress', { content: [{ type: 'text', text: `⏳ Command started on VM ${vmid} with PID ${pid}. Polling for output...` }] });
-
-        let statusResponse;
-        const maxTries = 30; // Poll for a maximum of 15 seconds
-        for (let i = 0; i < maxTries; i++) {
-          await sleep(500);
-          statusResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec-status`, 'GET', null, { pid });
-          if (statusResponse.exited === 1) break;
-          if (i > 0 && i % 4 === 0) {
-            sendEvent('progress', { content: [{ type: 'text', text: `... still waiting for command with PID ${pid} to complete...` }] });
-          }
-        }
-
-        if (statusResponse.exited !== 1) {
-          throw new Error('Command timed out waiting for completion.');
-        }
-
-        const output = statusResponse['out-data'] || '';
-        const error = statusResponse['err-data'] || '';
-        const exitCode = statusResponse.exitcode;
-
-        let resultText = `✅ **Command completed on VM ${vmid} on ${serverConfig.name}**\n\n`;
-        resultText += `**Command**: \`${command}\`\n`;
-        resultText += `**Exit Code**: ${exitCode}\n\n`;
-        if (output) resultText += `**Output (stdout)**:\n\`\`\`\n${output}\n\`\`\`\n`;
-        if (error) resultText += `**Error (stderr)**:\n\`\`\`\n${error}\n\`\`\`\n`;
-        if (!output && !error) resultText += "Command produced no output.";
-        
-        sendEvent('progress', { content: [{ type: 'text', text: resultText }] });
-
-      } else { // LXC
-        const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/lxc/${vmid}/exec`, 'POST', { command: commandArray });
-        let output = `📦 **Command executed on LXC ${vmid} on ${serverConfig.name}**\n\n`;
-        output += `**Command**: \`${command}\`\n`;
-        output += `**Output**:\n\`\`\`\n${result || 'Command executed successfully with no output.'}\n\`\`\``;
-        sendEvent('progress', { content: [{ type: 'text', text: output }] });
+    if (type === 'qemu') {
+      const execResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec`, 'POST', { command: commandArray });
+      if (!execResponse || !execResponse.pid) {
+        throw new Error('Failed to start command execution or get a PID from the guest agent.');
       }
-    } catch (error) {
-      sendEvent('error', { error: { code: -32000, message: `Server error: ${error.message}` } });
-      res.end();
+
+      const pid = execResponse.pid;
+      this.server.sendProgress(request, {
+        content: [{ type: 'text', text: `⏳ Command started on VM ${vmid} with PID ${pid}. Polling for output...` }]
+      });
+
+      let statusResponse;
+      const maxTries = 30;
+      for (let i = 0; i < maxTries; i++) {
+        await sleep(500);
+        statusResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec-status`, 'GET', null, { pid });
+        if (statusResponse.exited === 1) break;
+        if (i > 0 && i % 4 === 0) {
+          this.server.sendProgress(request, {
+            content: [{ type: 'text', text: `... still waiting for command with PID ${pid} to complete...` }]
+          });
+        }
+      }
+
+      if (statusResponse.exited !== 1) {
+        throw new Error('Command timed out waiting for completion.');
+      }
+
+      const output = statusResponse['out-data'] || '';
+      const error = statusResponse['err-data'] || '';
+      const exitCode = statusResponse.exitcode;
+
+      let resultText = `✅ **Command completed on VM ${vmid} on ${serverConfig.name}**\n\n`;
+      resultText += `**Command**: \`${command}\`\n`;
+      resultText += `**Exit Code**: ${exitCode}\n\n`;
+      if (output) resultText += `**Output (stdout)**:\n\`\`\`\n${output}\n\`\`\`\n`;
+      if (error) resultText += `**Error (stderr)**:\n\`\`\`\n${error}\n\`\`\`\n`;
+      if (!output && !error) resultText += "Command produced no output.";
+
+      this.server.sendProgress(request, { content: [{ type: 'text', text: resultText }] });
+
+    } else { // LXC
+      const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/lxc/${vmid}/exec`, 'POST', { command: commandArray });
+      let output = `📦 **Command executed on LXC ${vmid} on ${serverConfig.name}**\n\n`;
+      output += `**Command**: \`${command}\`\n`;
+      output += `**Output**:\n\`\`\`\n${result || 'Command executed successfully with no output.'}\n\`\`\``;
+      this.server.sendProgress(request, { content: [{ type: 'text', text: output }] });
     }
   }
 
@@ -580,84 +501,10 @@ export class ProxmoxServer {
   }
 
   async start() {
-    const app = express();
-    app.use(cors());
-    app.use(express.json());
-
-    const port = process.env.MCP_PORT || 3000;
-
-    app.post('/mcp', async (req, res) => {
-      const { jsonrpc, id, method, params } = req.body;
-
-      if (jsonrpc !== '2.0' || !id || !method) {
-        return res.status(400).json({ jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid Request' } });
-      }
-
-      try {
-        if (method === 'tools/list') {
-          const tools = this.getToolDefinitions();
-          return res.json({ jsonrpc: '2.0', id, result: { tools } });
-        }
-
-        if (method === 'tools/call') {
-          const { name, arguments: args } = params;
-          const serverConfig = this.servers.get(args.server);
-
-          if (!serverConfig) {
-            throw new Error(`Server '${args.server}' not found in configuration.`);
-          }
-
-          // Handle streaming tool
-          if (name === 'proxmox_execute_vm_command') {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.flushHeaders();
-
-            // Pass the response object to the tool to stream data
-            await this.executeVMCommand(res, id, serverConfig, args.node, args.vmid, args.command, args.type);
-
-            // End the stream
-            res.write(`id: ${id}\nevent: end\ndata: {}\n\n`);
-            return res.end();
-          }
-
-          let result;
-          switch (name) {
-            case 'proxmox_get_nodes':
-              result = await this.getNodes(serverConfig);
-              break;
-            case 'proxmox_get_node_status':
-              result = await this.getNodeStatus(serverConfig, args.node);
-              break;
-            case 'proxmox_get_vms':
-              result = await this.getVMs(serverConfig, args.node, args.type);
-              break;
-            case 'proxmox_get_vm_status':
-              result = await this.getVMStatus(serverConfig, args.node, args.vmid, args.type);
-              break;
-            case 'proxmox_get_storage':
-              result = await this.getStorage(serverConfig, args.node);
-              break;
-            case 'proxmox_get_cluster_status':
-              result = await this.getClusterStatus(serverConfig);
-              break;
-            default:
-              throw new Error(`Unknown tool: ${name}`);
-          }
-          return res.json({ jsonrpc: '2.0', id, result });
-        }
-
-        return res.status(400).json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } });
-
-      } catch (error) {
-        return res.status(500).json({ jsonrpc: '2.0', id, error: { code: -32000, message: `Server error: ${error.message}` } });
-      }
-    });
-
-    app.listen(port, () => {
-      console.log(`Proxmox MCP HTTP server listening on port ${port}`);
-    });
+    const port = parseInt(process.env.MCP_PORT || '3000', 10);
+    const transport = new StreamableHTTPServerTransport({ port });
+    await this.server.connect(transport);
+    console.log(`Proxmox MCP server running on http://localhost:${port}`);
   }
 }
 
