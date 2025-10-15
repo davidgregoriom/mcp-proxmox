@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import fetch from 'node-fetch';
 import https from 'https';
@@ -52,7 +52,7 @@ if (serverConfigs.length === 0) {
 
 export class ProxmoxServer {
   constructor() {
-    this.server = new McpServer(
+    this.server = new Server(
       {
         name: 'proxmox-server',
         version: '1.0.0',
@@ -502,7 +502,7 @@ export class ProxmoxServer {
 
   async start() {
     const port = parseInt(process.env.MCP_PORT || '3000', 10);
-    const transport = new StreamableHTTPServerTransport({ port });
+    const transport = new SSEServerTransport({ port });
     await this.server.connect(transport);
     console.log(`Proxmox MCP server running on http://localhost:${port}`);
   }
