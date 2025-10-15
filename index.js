@@ -77,9 +77,14 @@ export class ProxmoxServer {
     this.setupToolHandlers();
   }
 
-  async proxmoxRequest(serverConfig, endpoint, method = 'GET', body = null) {
+  async proxmoxRequest(serverConfig, endpoint, method = 'GET', body = null, params = null) {
     const baseUrl = `https://${serverConfig.host}:${serverConfig.port}/api2/json`;
-    const url = `${baseUrl}${endpoint}`;
+    let url = `${baseUrl}${endpoint}`;
+
+    if (method === 'GET' && params) {
+      const query = new URLSearchParams(params).toString();
+      url += `?${query}`;
+    }
     
     const headers = {
       'Authorization': `PVEAPIToken=${serverConfig.user}!${serverConfig.tokenName}=${serverConfig.tokenValue}`,
@@ -242,7 +247,11 @@ export class ProxmoxServer {
             return await this.getVMStatus(serverConfig, args.node, args.vmid, args.type);
             
           case 'proxmox_execute_vm_command':
-            return await this.executeVMCommand(serverConfig, args.node, args.vmid, args.command, args.type);
+            // This tool provides streaming updates, so we don't return its final value here.
+            // We await it to ensure the streaming is complete and to catch top-level errors.
+            await this.executeVMCommand(request, serverConfig, args.node, args.vmid, args.command, args.type);
+            // Return an empty final response to signal the end of the call.
+            return { content: [] };
             
           case 'proxmox_get_storage':
             return await this.getStorage(serverConfig, args.node);
@@ -405,53 +414,70 @@ export class ProxmoxServer {
     };
   }
 
-  async executeVMCommand(serverConfig, node, vmid, command, type = 'qemu') {
+  async executeVMCommand(request, serverConfig, node, vmid, command, type = 'qemu') {
     if (!serverConfig.allowElevated) {
-      return {
-        content: [{ 
-          type: 'text', 
-          text: `⚠️  **VM Command Execution Requires Elevated Permissions on ${serverConfig.name}**\n\nTo execute commands on VMs, ensure \`allowElevated\` is set to true for this server in your config.json and the API token has appropriate VM permissions.\n\n**Current permissions**: Basic (VM listing only)\n**Requested command**: \`${command}\``
-        }]
-      };
+      // This is a terminal error, so we can throw.
+      throw new Error(`VM Command Execution Requires Elevated Permissions on ${serverConfig.name}.`);
     }
-    
+
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const commandArray = ['/bin/sh', '-c', command];
+
     try {
-      // For QEMU VMs, we need to use the guest agent
       if (type === 'qemu') {
-        const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec`, 'POST', {
-          command: command
+        const execResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec`, 'POST', { command: commandArray });
+        if (!execResponse || !execResponse.pid) {
+          throw new Error('Failed to start command execution or get a PID from the guest agent.');
+        }
+        
+        const pid = execResponse.pid;
+        this.server.sendProgress(request, {
+          content: [{ type: 'text', text: `⏳ Command started on VM ${vmid} with PID ${pid}. Polling for output...` }]
         });
+
+        let statusResponse;
+        const maxTries = 30; // Poll for a maximum of 15 seconds
+        for (let i = 0; i < maxTries; i++) {
+          await sleep(500);
+          statusResponse = await this.proxmoxRequest(serverConfig, `/nodes/${node}/qemu/${vmid}/agent/exec-status`, 'GET', null, { pid });
+          if (statusResponse.exited === 1) break;
+          // Send a heartbeat progress update
+          if (i > 0 && i % 4 === 0) {
+            this.server.sendProgress(request, {
+              content: [{ type: 'text', text: `... still waiting for command with PID ${pid} to complete...` }]
+            });
+          }
+        }
+
+        if (statusResponse.exited !== 1) {
+          throw new Error('Command timed out waiting for completion.');
+        }
+
+        const output = statusResponse['out-data'] || '';
+        const error = statusResponse['err-data'] || '';
+        const exitCode = statusResponse.exitcode;
+
+        let resultText = `✅ **Command completed on VM ${vmid} on ${serverConfig.name}**\n\n`;
+        resultText += `**Command**: \`${command}\`\n`;
+        resultText += `**Exit Code**: ${exitCode}\n\n`;
+        if (output) resultText += `**Output (stdout)**:\n\`\`\`\n${output}\n\`\`\`\n`;
+        if (error) resultText += `**Error (stderr)**:\n\`\`\`\n${error}\n\`\`\`\n`;
+        if (!output && !error) resultText += "Command produced no output.";
         
-        let output = `💻 **Command executed on VM ${vmid} on ${serverConfig.name}**\n\n`;
-        output += `**Command**: \`${command}\`\n`;
-        output += `**Result**: Command submitted to guest agent\n`;
-        output += `**PID**: ${result.pid || 'N/A'}\n\n`;
-        output += `*Note: Use guest agent status to check command completion*`;
-        
-        return {
-          content: [{ type: 'text', text: output }]
-        };
-      } else {
-        // For LXC containers, we can execute directly
-        const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/lxc/${vmid}/exec`, 'POST', {
-          command: command
-        });
-        
+        // Send the final output as the last progress update.
+        this.server.sendProgress(request, { content: [{ type: 'text', text: resultText }] });
+
+      } else { // LXC
+        // For LXC, the output is returned directly, so we just send it as a single "progress" update.
+        const result = await this.proxmoxRequest(serverConfig, `/nodes/${node}/lxc/${vmid}/exec`, 'POST', { command: commandArray });
         let output = `📦 **Command executed on LXC ${vmid} on ${serverConfig.name}**\n\n`;
         output += `**Command**: \`${command}\`\n`;
-        output += `**Output**:\n\`\`\`\n${result || 'Command executed successfully'}\n\`\`\``;
-        
-        return {
-          content: [{ type: 'text', text: output }]
-        };
+        output += `**Output**:\n\`\`\`\n${result || 'Command executed successfully with no output.'}\n\`\`\``;
+        this.server.sendProgress(request, { content: [{ type: 'text', text: output }] });
       }
     } catch (error) {
-      return {
-        content: [{ 
-          type: 'text', 
-          text: `❌ **Failed to execute command on VM ${vmid}**\n\nError: ${error.message}\n\n*Note: Make sure the VM has guest agent installed and running*` 
-        }]
-      };
+      // Throwing the error will send a final error response to the client.
+      throw new Error(`Failed to execute command on VM ${vmid}: ${error.message}`);
     }
   }
 

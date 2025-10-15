@@ -119,8 +119,52 @@ All tools now require a `server` parameter to specify which Proxmox instance to 
     -   `node` (string, required): The name of the node.
 
 ---
-(And so on for all other tools...)
+
+### `proxmox_get_vms`
+-   **Description**: Lists all VMs and containers on a server or a specific node.
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, optional): Filter by a specific node.
+    -   `type` (string, optional): Filter by type (`qemu`, `lxc`, or `all`).
+
 ---
+
+### `proxmox_get_vm_status`
+-   **Description**: Gets detailed status for a specific VM or container.
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, required): The node where the VM is located.
+    -   `vmid` (string, required): The ID of the VM or container.
+    -   `type` (string, optional): The type (`qemu` or `lxc`).
+
+---
+
+### `proxmox_execute_vm_command`
+-   **Description**: Executes a command in a VM or container (requires elevated permissions). This tool streams progress updates.
+-   **Streaming Behavior**:
+    -   For QEMU VMs, the tool sends progress messages while waiting for the command to finish, as the Proxmox API returns the full output only upon completion.
+    -   For LXC containers, the output is returned directly in a single message.
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, required): The node where the VM is located.
+    -   `vmid` (string, required): The ID of the VM or container.
+    -   `command` (string, required): The command to execute.
+    -   `type` (string, optional): The type (`qemu` or `lxc`).
+
+---
+
+### `proxmox_get_storage`
+-   **Description**: Lists storage pools on a server or a specific node.
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
+    -   `node` (string, optional): Filter by a specific node.
+
+---
+
+### `proxmox_get_cluster_status`
+-   **Description**: Gets the overall status of a Proxmox cluster.
+-   **Parameters**:
+    -   `server` (string, required): The name of the server to target.
 
 ## 📁 Project Structure
 
